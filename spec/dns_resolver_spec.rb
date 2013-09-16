@@ -34,6 +34,7 @@ describe Fluentd::DNSResolver do
     end
   end
 
+=begin
   context 'for IPv6 addresses' do
     describe '#resolve' do
       r = Fluentd::DNSResolver.new(:ipv6)
@@ -65,4 +66,5 @@ describe Fluentd::DNSResolver do
       end
     end
   end
+=end
 end
