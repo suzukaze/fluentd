@@ -28,6 +28,7 @@ module Fluent
     config_param :tag, :string
     config_param :rotate_wait, :time, :default => 5
     config_param :pos_file, :string, :default => nil
+    config_param :start_reading_head, :bool, :default => false
 
     attr_reader :paths
 
@@ -62,7 +63,7 @@ module Fluent
       @loop = Coolio::Loop.new
       @tails = @paths.map {|path|
         pe = @pf ? @pf[path] : MemoryPositionEntry.new
-        TailWatcher.new(path, @rotate_wait, pe, &method(:receive_lines))
+        TailWatcher.new(path, @rotate_wait, pe, @start_reading_head, &method(:receive_lines))
       }
       @tails.each {|tail|
         tail.attach(@loop)
@@ -115,10 +116,11 @@ module Fluent
     end
 
     class TailWatcher
-      def initialize(path, rotate_wait, pe, &receive_lines)
+      def initialize(path, rotate_wait, pe, start_reading_head, &receive_lines)
         @path = path
         @rotate_wait = rotate_wait
         @pe = pe || MemoryPositionEntry.new
+        @start_reading_head = start_reading_head
         @receive_lines = receive_lines
 
         @rotate_queue = []
@@ -196,19 +198,42 @@ module Fluent
             if inode == last_inode
               # seek to the saved position
               pos = @pe.read_pos
-            elsif last_inode != 0
-              # this is FilePositionEntry and fluentd once started.
-              # read data from the head of the rotated file.
-              # logs never duplicate because this file is a rotated new file.
-              pos = 0
-              @pe.update(inode, pos)
             else
-              # this is MemoryPositionEntry or this is the first time fluentd started.
-              # seek to the end of the any files.
-              # logs may duplicate without this seek because it's not sure the file is
-              # existent file or rotated new file.
-              pos = fsize
-              @pe.update(inode, pos)
+              if @start_reading_head
+                if @pe.instance_of?(FilePositionEntry)
+                  # this is FilePositionEntry
+                  # this is the first time fluentd started or log file get rotated
+                  # read data from the head of the file.
+                  head = true
+                else
+                  # this is MemoryPositionEntry
+                  # seek to the end of the any files.
+                  # logs may duplicate without this seek because it's not sure the log position
+                  head = false
+                end
+              else
+                if last_inode != 0
+                  # this is FilePositionEntry and fluentd once started.
+                  # read data from the head of the rotated file.
+                  # logs never duplicate because this file is a rotated new file.
+                  head = true
+                else
+                  # this is MemoryPositionEntry or this is the first time fluentd started.
+                  # seek to the end of the any files.
+                  # logs may duplicate without this seek because it's not sure the file is
+                  # existent file or rotated new file.
+                  head = false;
+                end
+              end
+              if head
+                # start reading the head of a file
+                pos = 0
+                @pe.update(inode, pos)
+              else
+                # start reading the tail of a file
+                pos = fsize
+                @pe.update(inode, pos)
+              end
             end
             io.seek(pos)
 
